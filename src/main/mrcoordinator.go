@@ -11,10 +11,9 @@ package main
 
 import (
 	"fmt"
+	"mit6.824-lab/mr"
 	"os"
 	"time"
-
-	"6.824/mr"
 )
 
 /*

@@ -7,6 +7,7 @@ import (
 	"hash/fnv"
 	"io/ioutil"
 	"log"
+	"mit6.824-lab/constant"
 	"net/rpc"
 	"os"
 	"sort"
@@ -197,7 +198,7 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 			}
 		}
 		//lab1的任务说是最多1s内能完成，睡1s也能在心跳期内完成刷新
-		time.Sleep(1 * time.Second)
+		time.Sleep(constant.HeartDuration)
 	}
 }
 

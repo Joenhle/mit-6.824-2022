@@ -1,9 +1,10 @@
 package mr
 
 import (
-	"6.824/util/collections_helper"
 	"fmt"
 	"log"
+	"mit6.824-lab/constant"
+	"mit6.824-lab/util/collections_helper"
 	"net"
 	"net/http"
 	"net/rpc"
@@ -15,19 +16,19 @@ import (
 var coordinator *Coordinator
 
 type server struct {
-	status          int    //0:空闲 1:执行任务中 2:超时或者宕机
-	taskType        string // 运行的任务类型 ,"map" "reduce" (只有status=1时才成立)
-	mapTaskDone     []string
-	mapTaskDoing    []string
-	reduceTaskDone  []int
-	reduceTaskDoing []int
+	status          int       //0:空闲 1:执行任务中 2:超时或者宕机
+	taskType        string    // 运行的任务类型 ,"map" "reduce" (只有status=1时才成立)
+	mapTaskDone     []string  //已经完成的map任务
+	mapTaskDoing    []string  //正在执行的map任务
+	reduceTaskDone  []int     //已经完成的reduce任务
+	reduceTaskDoing []int     //正在执行的reduce任务
 	lastHeartBeat   time.Time //上一次的心跳时期
 }
 
 func (s *server) heartCheck() {
 	go func() {
 		for true {
-			if time.Now().Sub(s.lastHeartBeat) > 10*time.Second {
+			if time.Now().Sub(s.lastHeartBeat) > constant.WorkerTimeOut {
 				//server超过10s没有延续心跳，判为宕机，结束该server的监听
 				fmt.Printf("检测到worker-%v失去心跳，转移任务，视为宕机", s)
 				coordinator.Lock()
@@ -39,7 +40,7 @@ func (s *server) heartCheck() {
 				s.status = 2
 				break
 			}
-			time.Sleep(1 * time.Second)
+			time.Sleep(constant.HeartDuration)
 		}
 	}()
 }
@@ -164,7 +165,6 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 // start a thread that listens for RPCs from worker.go
 //
 func (c *Coordinator) server() {
-
 	rpc.Register(c)
 	rpc.HandleHTTP()
 	//l, e := net.Listen("tcp", ":1234")
