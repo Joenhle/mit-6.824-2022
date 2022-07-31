@@ -1,0 +1,7 @@
+pkg/
+api.key
+.api.key.trimmed
+*-handin.tar.gz
+.python-version
+.idea
+.DS_Store
