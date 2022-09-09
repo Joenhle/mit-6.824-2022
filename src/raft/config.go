@@ -8,9 +8,9 @@ package raft
 // test with the original before submitting.
 //
 
-import "6.824/labgob"
-import "6.824/labrpc"
 import "bytes"
+import "mit6.824-lab/labgob"
+import "mit6.824-lab/labrpc"
 import "log"
 import "sync"
 import "sync/atomic"
@@ -362,6 +362,9 @@ func (cfg *config) connect(i int) {
 
 	cfg.connected[i] = true
 
+	if len(cfg.rafts) > i && cfg.rafts[i] != nil {
+		cfg.rafts[i].debug("connect")
+	}
 	// outgoing ClientEnds
 	for j := 0; j < cfg.n; j++ {
 		if cfg.connected[j] {
@@ -385,6 +388,9 @@ func (cfg *config) disconnect(i int) {
 
 	cfg.connected[i] = false
 
+	if len(cfg.rafts) > i && cfg.rafts[i] != nil {
+		cfg.rafts[i].debug("disconnect")
+	}
 	// outgoing ClientEnds
 	for j := 0; j < cfg.n; j++ {
 		if cfg.endnames[i] != nil {
