@@ -88,11 +88,11 @@ type Raft struct {
 	logReplicateChannel chan struct{}
 }
 
-// return currentTerm and whether this server
-// believes it is the leader.
-func (rf *Raft) GetState() (int, bool) {
+func (r *Raft) GetState() (int, bool) {
 	// Your code here (2A).
-	return rf.currentTerm, rf.state == LEADER
+	r.RLock()
+	defer r.RUnlock()
+	return r.currentTerm, r.state == LEADER
 }
 
 //

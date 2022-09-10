@@ -3,7 +3,6 @@ package raft
 import (
 	"math"
 	"math/rand"
-	"sync"
 	"time"
 )
 
@@ -57,12 +56,12 @@ func (r *Raft) requestVote() {
 	if r.killed() == false && r.state == CANDIDATE {
 		r.debug("[requestVote] 准备开始投选举票")
 		voteNum := 1
-		var voteLock sync.Mutex
 		for peerIndex, _ := range r.peers {
 			if peerIndex == r.me {
 				continue
 			}
 			go func(server int) {
+				r.Lock()
 				lastLog := r.getLastLog(false)
 				req := &RequestVoteArgs{
 					Term:         r.currentTerm,
@@ -71,26 +70,29 @@ func (r *Raft) requestVote() {
 					LastLogTerm:  lastLog.Term,
 				}
 				resp := &RequestVoteReply{}
+				r.Unlock()
 				if ok := r.sendRequestVote(server, req, resp); ok {
+					r.Lock()
 					if r.state != CANDIDATE {
+						r.Unlock()
 						return
 					}
 					if resp.VoteGranted {
-						voteLock.Lock()
 						voteNum += 1
 						r.debug("[requestVote] 获得server-%v的选票", server)
 						if voteNum >= int(math.Ceil(float64(len(r.peers))/2)) {
-							voteLock.Unlock()
 							r.debug("[reqyestVote] 获得了大部分选票，开始变为LEADER")
 							r.changeState(LEADER, true)
+							r.Unlock()
 							return
 						}
-						voteLock.Unlock()
 					}
 					if resp.Term > r.currentTerm {
 						r.changeState(FLOWER, false)
+						r.Unlock()
 						return
 					}
+					r.Unlock()
 				} else {
 					r.debug("requestVote RPC 调用失败, target is %v", server)
 				}

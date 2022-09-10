@@ -8,7 +8,7 @@ import (
 func (r *Raft) debug(format string, a ...interface{}) {
 	if Debug {
 		raftInfo := fmt.Sprintf("Raft[dead:%v me:%v state:%v currentTerm:%v votedFor:%v logs:%v commitIndex:%v lastApplied:%v nextIndex:%v matchIndex:%v] ",
-			r.dead, r.me, r.state, r.currentTerm, r.votedFor, r.logs, r.commitIndex, r.lastApplied, r.nextIndex, r.matchIndex)
+			r.killed(), r.me, r.state, r.currentTerm, r.votedFor, r.logs, r.commitIndex, r.lastApplied, r.nextIndex, r.matchIndex)
 		log.Printf(raftInfo+format, a...)
 	}
 }
