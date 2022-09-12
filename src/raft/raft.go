@@ -27,34 +27,6 @@ import (
 	"mit6.824-lab/labrpc"
 )
 
-//
-// as each Raft peer becomes aware that successive log entries are
-// committed, the peer should send an ApplyMsg to the service (or
-// tester) on the same server, via the applyCh passed to Make(). set
-// CommandValid to true to indicate that the ApplyMsg contains a newly
-// committed log entry.
-//
-// in part 2D you'll want to send other kinds of messages (e.g.,
-// snapshots) on the applyCh, but set CommandValid to false for these
-// other uses.
-//
-type ApplyMsg struct {
-	CommandValid bool
-	Command      interface{}
-	CommandIndex int
-
-	// For 2D:
-	SnapshotValid bool
-	Snapshot      []byte
-	SnapshotTerm  int
-	SnapshotIndex int
-}
-
-type Log struct {
-	Index int
-	Term  int
-}
-
 type RaftState int
 
 const (
@@ -62,6 +34,8 @@ const (
 	CANDIDATE
 	LEADER
 )
+
+var Begin = time.Now()
 
 type Raft struct {
 	sync.RWMutex                     // Lock to protect shared access to this peer's state
@@ -83,6 +57,7 @@ type Raft struct {
 	nextIndex         []int
 	matchIndex        []int
 	lastHeartBeatTime time.Time
+	applyCh           chan ApplyMsg
 
 	electionChannel     chan struct{}
 	logReplicateChannel chan struct{}
@@ -142,14 +117,6 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
 }
 
-func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
-	// Your code here (2B).
-	return index, term, isLeader
-}
-
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
@@ -166,6 +133,8 @@ func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan 
 		lastApplied:         0,
 		electionChannel:     make(chan struct{}, 10),
 		logReplicateChannel: make(chan struct{}, 10),
+		applyCh:             applyCh,
+		logs:                []Log{{Index: 0, Term: 0}},
 	}
 	r.peers = peers
 	r.persister = persister

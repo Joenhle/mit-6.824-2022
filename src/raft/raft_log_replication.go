@@ -6,8 +6,26 @@ import (
 )
 
 const (
-	HEART_BEAT_DURATION = time.Duration(200 * time.Millisecond) //心跳时间为最小超时时间的一半
+	HEART_BEAT_DURATION = 200 * time.Millisecond //心跳时间为最小超时时间的一半
 )
+
+type ApplyMsg struct {
+	CommandValid bool
+	Command      interface{}
+	CommandIndex int
+
+	// For 2D:
+	SnapshotValid bool
+	Snapshot      []byte
+	SnapshotTerm  int
+	SnapshotIndex int
+}
+
+type Log struct {
+	Index   int
+	Term    int
+	Commend interface{}
+}
 
 type AppendEntriesArgs struct {
 	Term         int
@@ -19,8 +37,25 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term    int
-	Success bool
+	Term      int
+	Success   bool
+	NextIndex int
+}
+
+func (r *Raft) Start(command interface{}) (int, int, bool) {
+	now := time.Now()
+	r.Lock()
+	defer r.Unlock()
+	if r.killed() || r.state != LEADER {
+		return -1, -1, false
+	}
+	r.logs = append(r.logs, Log{
+		Commend: command,
+		Index:   len(r.logs),
+		Term:    r.currentTerm,
+	})
+	r.debug("[Start] Leader接受到命令[commend=%v]，送入log。costTime = %d", command, time.Since(now).Milliseconds())
+	return len(r.logs) - 1, r.currentTerm, true
 }
 
 func (r *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -53,30 +88,28 @@ func (r *Raft) HandleAppendEntries(req *AppendEntriesArgs, reply *AppendEntriesR
 	} else {
 		r.electionChannel <- struct{}{}
 	}
-
-	if req.PrevLogIndex == 0 {
-		reply.Success = true
-		r.logs = req.Entries
-		if req.LeaderCommit > r.commitIndex {
-			r.commitIndex = int(math.Min(float64(req.LeaderCommit), float64(r.getLastLog(false).Index)))
+	if len(r.logs) < req.PrevLogIndex+1 {
+		r.Unlock()
+		return
+	}
+	if r.logs[req.PrevLogIndex].Term != req.PrevLogTerm {
+		nextIndex := 1
+		for i := req.PrevLogIndex - 1; i >= 0; i-- {
+			if r.logs[i].Term != r.logs[req.PrevLogIndex].Term {
+				nextIndex = i + 1
+				break
+			}
 		}
+		reply.NextIndex = nextIndex
+		r.logs = r.logs[:req.PrevLogIndex]
 		r.Unlock()
 		return
 	}
-
-	if len(r.logs) < req.PrevLogIndex {
-		r.Unlock()
-		return
-	}
-	if r.logs[req.PrevLogIndex-1].Term != req.PrevLogTerm {
-		r.logs = r.logs[:req.PrevLogIndex-1]
-		r.Unlock()
-		return
-	}
-	newLogs := append(r.logs[:req.PrevLogIndex], req.Entries...)
+	newLogs := append(r.logs[:req.PrevLogIndex+1], req.Entries...)
 	r.logs = newLogs
 	if req.LeaderCommit > r.commitIndex {
-		r.commitIndex = int(math.Min(float64(req.LeaderCommit), float64(r.getLastLog(false).Index)))
+		r.commitIndex = int(math.Min(float64(req.LeaderCommit), float64(r.getLastLog().Index)))
+		r.applyMsg()
 	}
 	reply.Success = true
 	r.Unlock()
@@ -88,13 +121,27 @@ func (r *Raft) healthyCheck() {
 		time.Sleep(time.Duration(getRand(r.me)) * time.Millisecond)
 		if r.getState() == LEADER {
 			ticker := time.NewTicker(HEART_BEAT_DURATION)
-			select {
-			case <-ticker.C:
-			case <-r.logReplicateChannel:
-				r.appendEntries()
+			if r.getState() == LEADER {
+				select {
+				case <-ticker.C:
+					r.appendEntries()
+				case <-r.logReplicateChannel:
+					r.appendEntries()
+				}
 			}
 		}
 	}
+}
+
+func (r *Raft) applyMsg() {
+	for i := r.lastApplied + 1; i <= r.commitIndex; i++ {
+		r.applyCh <- ApplyMsg{
+			CommandValid: true,
+			Command:      r.logs[i].Commend,
+			CommandIndex: r.logs[i].Index,
+		}
+	}
+	r.lastApplied = r.commitIndex
 }
 
 func (r *Raft) appendEntries() {
@@ -106,7 +153,11 @@ func (r *Raft) appendEntries() {
 		}
 		go func(server int) {
 			r.Lock()
-			lastLog := r.getLastLog(false)
+			if r.state != LEADER {
+				r.Unlock()
+				return
+			}
+			lastLog := r.getLastLog()
 			prevIndex, prevTerm := r.getPrevLogInfo(server)
 			req := &AppendEntriesArgs{
 				Term:         r.currentTerm,
@@ -115,8 +166,8 @@ func (r *Raft) appendEntries() {
 				PrevLogTerm:  prevTerm,
 				LeaderCommit: r.commitIndex,
 			}
-			if lastLog.Index >= r.nextIndex[server] && r.nextIndex[server]-1 >= 0 {
-				req.Entries = r.logs[r.nextIndex[server]-1:]
+			if lastLog.Index >= r.nextIndex[server] && r.nextIndex[server] >= 0 {
+				req.Entries = r.logs[r.nextIndex[server]:]
 			} else {
 				req.Entries = []Log{}
 			}
@@ -131,12 +182,14 @@ func (r *Raft) appendEntries() {
 				}
 				if resp.Success {
 					r.debug("[appendEntries] server-%d日志同步成功", server)
-					r.matchIndex[server] = r.getLastLog(false).Index
+					r.matchIndex[server] = r.getLastLog().Index
 					r.nextIndex[server] = r.matchIndex[server] + 1
 					replicateNum += 1
 					if replicateNum >= int(math.Ceil(float64(len(r.peers))/2)) {
-						r.debug("[appendEntries] 超过半数server同步成功，更新commitIndex")
-						r.commitIndex = r.getLastLog(false).Index
+						r.debug("[appendEntries] 超过半数server同步成功，开始更新commitIndex，lastApplied")
+						r.commitIndex = r.getLastLog().Index
+						r.applyMsg()
+						r.debug("[appendEntries] 超过半数server同步成功，更新commitIndex，lastApplied完成")
 					}
 				} else if resp.Term > r.currentTerm {
 					r.debug("[appendEntries] 检测到server-%d的任期大于当前任期，准备变为FLOWER", server)
@@ -145,7 +198,9 @@ func (r *Raft) appendEntries() {
 					return
 				} else {
 					r.debug("[appendEntries] server-%d日志同步失败", server)
-					if r.nextIndex[server] > 1 {
+					if resp.NextIndex >= 1 {
+						r.nextIndex[server] = resp.NextIndex
+					} else if r.nextIndex[server]-1 >= 1 {
 						r.nextIndex[server] -= 1
 					}
 				}
