@@ -17,8 +17,8 @@ func getRand(seed int) int {
 }
 
 func ElectionTimeOut() time.Duration {
-	//选举超时时间为350毫秒~500毫秒
-	return time.Duration(350+rand.Intn(150)) * time.Millisecond
+	//选举超时时间为150毫秒~200毫秒
+	return time.Duration(150+rand.Intn(50)) * time.Millisecond
 }
 
 func (r *Raft) watchElectionTimeout() {

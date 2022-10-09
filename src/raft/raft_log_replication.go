@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	HEART_BEAT_DURATION = 200 * time.Millisecond //心跳时间为最小超时时间的一半
+	HEART_BEAT_DURATION = 100 * time.Millisecond //心跳时间为最小超时时间的一半
 )
 
 type ApplyMsg struct {
@@ -54,7 +54,7 @@ func (r *Raft) Start(command interface{}) (int, int, bool) {
 		Index:   len(r.logs),
 		Term:    r.currentTerm,
 	})
-	r.debug("[Start] Leader接受到命令[commend=%v]，送入log。costTime = %d", command, time.Since(now).Milliseconds())
+	r.debug("[Start] Leader接受到命令，送入log。costTime = %d", time.Since(now).Milliseconds())
 	return len(r.logs) - 1, r.currentTerm, true
 }
 
@@ -101,7 +101,7 @@ func (r *Raft) HandleAppendEntries(req *AppendEntriesArgs, reply *AppendEntriesR
 			}
 		}
 		reply.NextIndex = nextIndex
-		r.logs = r.logs[:req.PrevLogIndex]
+		r.logs = r.logs[:nextIndex]
 		r.Unlock()
 		return
 	}
