@@ -125,6 +125,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 }
 
 func (rf *Raft) Kill() {
+	rf.debug("server-%d was killed", rf.me)
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
 }

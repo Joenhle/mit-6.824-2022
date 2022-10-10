@@ -91,6 +91,7 @@ func (r *Raft) HandleAppendEntries(req *AppendEntriesArgs, reply *AppendEntriesR
 		r.electionChannel <- struct{}{}
 	}
 	if len(r.Logs) < req.PrevLogIndex+1 {
+		reply.NextIndex = len(r.Logs)
 		r.Unlock()
 		return
 	}
@@ -112,8 +113,11 @@ func (r *Raft) HandleAppendEntries(req *AppendEntriesArgs, reply *AppendEntriesR
 	r.Logs = newLogs
 	r.persist()
 	if req.LeaderCommit > r.commitIndex {
-		r.commitIndex = int(math.Min(float64(req.LeaderCommit), float64(r.getLastLog().Index)))
-		r.applyMsg()
+		to := int(math.Min(float64(req.LeaderCommit), float64(r.getLastLog().Index)))
+		if r.Logs[to].Term == r.CurrentTerm {
+			r.commitIndex = to
+			r.applyMsg()
+		}
 	}
 	reply.Success = true
 	r.Unlock()
@@ -123,13 +127,15 @@ func (r *Raft) HandleAppendEntries(req *AppendEntriesArgs, reply *AppendEntriesR
 func (r *Raft) healthyCheck() {
 	for r.killed() == false {
 		time.Sleep(time.Duration(getRand(r.me)) * time.Millisecond)
-		if r.getState() == LEADER {
+		if r.getState() == LEADER && r.killed() == false {
 			ticker := time.NewTicker(HEART_BEAT_DURATION)
-			if r.getState() == LEADER {
-				select {
-				case <-ticker.C:
+			select {
+			case <-ticker.C:
+				if r.getState() == LEADER && r.killed() == false {
 					r.appendEntries()
-				case <-r.logReplicateChannel:
+				}
+			case <-r.logReplicateChannel:
+				if r.getState() == LEADER && r.killed() == false {
 					r.appendEntries()
 				}
 			}
@@ -151,6 +157,7 @@ func (r *Raft) applyMsg() {
 func (r *Raft) appendEntries() {
 	r.debug("[appendEntries] 开始进行日志同步检测")
 	replicateNum := 1
+	disconnectNum := 0
 	lastLog := r.getLastLog()
 	for peerIndex, _ := range r.peers {
 		if peerIndex == r.me {
@@ -158,7 +165,7 @@ func (r *Raft) appendEntries() {
 		}
 		go func(server int) {
 			r.Lock()
-			if r.state != LEADER {
+			if r.state != LEADER || r.killed() == true {
 				r.Unlock()
 				return
 			}
@@ -180,7 +187,7 @@ func (r *Raft) appendEntries() {
 			// 注意这里的RPC可能会延迟达到7000毫秒才返回，注意别长时间占锁
 			if ok := r.sendAppendEntries(server, req, resp); ok {
 				r.Lock()
-				if r.state != LEADER {
+				if r.state != LEADER || r.killed() == true {
 					r.Unlock()
 					return
 				}
@@ -190,10 +197,14 @@ func (r *Raft) appendEntries() {
 					r.nextIndex[server] = r.matchIndex[server] + 1
 					replicateNum += 1
 					if replicateNum >= int(math.Ceil(float64(len(r.peers))/2)) {
-						r.debug("[appendEntries] 超过半数server同步成功，开始更新commitIndex，lastApplied")
-						r.commitIndex = lastLog.Index
-						r.applyMsg()
-						r.debug("[appendEntries] 超过半数server同步成功，更新commitIndex，lastApplied完成")
+						if lastLog.Term == r.CurrentTerm {
+							r.debug("[appendEntries] 超过半数server同步成功，开始更新commitIndex，lastApplied")
+							r.commitIndex = lastLog.Index
+							r.applyMsg()
+							r.debug("[appendEntries] 超过半数server同步成功，更新commitIndex，lastApplied完成")
+						} else {
+							r.debug("[appendEntries] 超过半数server同步成功，但不能提交非当前任期的log")
+						}
 					}
 				} else if resp.Term > r.CurrentTerm {
 					r.debug("[appendEntries] 检测到server-%d的任期大于当前任期，准备变为FLOWER", server)
@@ -210,7 +221,18 @@ func (r *Raft) appendEntries() {
 				}
 				r.Unlock()
 			} else {
+				r.Lock()
+				if r.state != LEADER || r.killed() == true {
+					r.Unlock()
+					return
+				}
+				disconnectNum += 1
+				if disconnectNum >= int(math.Ceil(float64(len(r.peers)/2))) {
+					r.debug("[appendEntries] 超过半数server失去响应, 重新变为flower")
+					r.changeState(FLOWER, false)
+				}
 				r.debug("[appendEntries] server-%d RPC调用失败", server)
+				r.Unlock()
 			}
 		}(peerIndex)
 	}

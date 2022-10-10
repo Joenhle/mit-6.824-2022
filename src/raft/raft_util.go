@@ -57,6 +57,11 @@ func (r *Raft) changeState(expectState RaftState, resetElectionTimeout bool) {
 	case LEADER:
 		r.debug("is changing state")
 		r.state = LEADER
+		r.Logs = append(r.Logs, Log{
+			Index:   len(r.Logs),
+			Term:    r.CurrentTerm,
+			Commend: -1,
+		})
 		lastLog := r.getLastLog()
 		for i := 0; i < len(r.nextIndex); i++ {
 			r.nextIndex[i] = lastLog.Index + 1

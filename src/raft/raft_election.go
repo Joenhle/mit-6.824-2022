@@ -73,7 +73,7 @@ func (r *Raft) requestVote() {
 				r.Unlock()
 				if ok := r.sendRequestVote(server, req, resp); ok {
 					r.Lock()
-					if r.state != CANDIDATE {
+					if r.state != CANDIDATE || r.killed() == true {
 						r.Unlock()
 						return
 					}
@@ -94,6 +94,12 @@ func (r *Raft) requestVote() {
 					}
 					r.Unlock()
 				} else {
+					r.Lock()
+					if r.state != CANDIDATE || r.killed() == true {
+						r.Unlock()
+						return
+					}
+					r.Unlock()
 					r.debug("requestVote RPC 调用失败, target is %v", server)
 				}
 			}(peerIndex)
