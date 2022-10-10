@@ -64,7 +64,7 @@ func (r *Raft) requestVote() {
 				r.Lock()
 				lastLog := r.getLastLog()
 				req := &RequestVoteArgs{
-					Term:         r.currentTerm,
+					Term:         r.CurrentTerm,
 					CandidateId:  r.me,
 					LastLogIndex: lastLog.Index,
 					LastLogTerm:  lastLog.Term,
@@ -87,7 +87,7 @@ func (r *Raft) requestVote() {
 							return
 						}
 					}
-					if resp.Term > r.currentTerm {
+					if resp.Term > r.CurrentTerm {
 						r.changeState(FLOWER, false)
 						r.Unlock()
 						return
@@ -108,24 +108,26 @@ func (r *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Request
 
 func (r *Raft) HandleRequestVote(req *RequestVoteArgs, reply *RequestVoteReply) {
 	r.Lock()
-	reply.Term = r.currentTerm
-	if req.Term < r.currentTerm {
+	reply.Term = r.CurrentTerm
+	if req.Term < r.CurrentTerm {
 		reply.VoteGranted = false
 		r.debug("[HandleRequestVote] voted = %v", false)
 		r.Unlock()
 		return
 	}
 	grant := false
-	if req.Term > r.currentTerm {
-		r.currentTerm = req.Term
+	if req.Term > r.CurrentTerm {
+		r.CurrentTerm = req.Term
+		r.persist()
 		r.changeState(FLOWER, true)
 	}
-	hasVoteRight := r.votedFor == -1 || r.votedFor == req.CandidateId
+	hasVoteRight := r.VotedFor == -1 || r.VotedFor == req.CandidateId
 	lastLog := r.getLastLog()
 	upToDate := req.LastLogTerm > lastLog.Term || (req.LastLogTerm == lastLog.Term && req.LastLogIndex >= lastLog.Index)
 	if hasVoteRight && upToDate {
 		grant = true
-		r.votedFor = req.CandidateId
+		r.VotedFor = req.CandidateId
+		r.persist()
 		r.electionChannel <- struct{}{}
 	}
 

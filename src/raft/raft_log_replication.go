@@ -49,13 +49,14 @@ func (r *Raft) Start(command interface{}) (int, int, bool) {
 	if r.killed() || r.state != LEADER {
 		return -1, -1, false
 	}
-	r.logs = append(r.logs, Log{
+	r.Logs = append(r.Logs, Log{
 		Commend: command,
-		Index:   len(r.logs),
-		Term:    r.currentTerm,
+		Index:   len(r.Logs),
+		Term:    r.CurrentTerm,
 	})
+	r.persist()
 	r.debug("[Start] Leader接受到命令，送入log。costTime = %d", time.Since(now).Milliseconds())
-	return len(r.logs) - 1, r.currentTerm, true
+	return len(r.Logs) - 1, r.CurrentTerm, true
 }
 
 func (r *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -65,22 +66,23 @@ func (r *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *App
 
 func (r *Raft) HandleAppendEntries(req *AppendEntriesArgs, reply *AppendEntriesReply) {
 	r.Lock()
-	if req.Term < r.currentTerm {
-		reply.Term = r.currentTerm
+	if req.Term < r.CurrentTerm {
+		reply.Term = r.CurrentTerm
 		reply.Success = false
 		r.Unlock()
 		return
 	}
-	if req.Term > r.currentTerm {
-		reply.Term = r.currentTerm
-		r.currentTerm = req.Term
+	if req.Term > r.CurrentTerm {
+		reply.Term = r.CurrentTerm
+		r.CurrentTerm = req.Term
+		r.persist()
 		reply.Success = false
 		r.changeState(FLOWER, true)
 		r.Unlock()
 		return
 	}
 
-	reply.Term = r.currentTerm
+	reply.Term = r.CurrentTerm
 	reply.Success = false
 
 	if r.state != FLOWER {
@@ -88,25 +90,27 @@ func (r *Raft) HandleAppendEntries(req *AppendEntriesArgs, reply *AppendEntriesR
 	} else {
 		r.electionChannel <- struct{}{}
 	}
-	if len(r.logs) < req.PrevLogIndex+1 {
+	if len(r.Logs) < req.PrevLogIndex+1 {
 		r.Unlock()
 		return
 	}
-	if r.logs[req.PrevLogIndex].Term != req.PrevLogTerm {
+	if r.Logs[req.PrevLogIndex].Term != req.PrevLogTerm {
 		nextIndex := 1
 		for i := req.PrevLogIndex - 1; i >= 0; i-- {
-			if r.logs[i].Term != r.logs[req.PrevLogIndex].Term {
+			if r.Logs[i].Term != r.Logs[req.PrevLogIndex].Term {
 				nextIndex = i + 1
 				break
 			}
 		}
 		reply.NextIndex = nextIndex
-		r.logs = r.logs[:nextIndex]
+		r.Logs = r.Logs[:nextIndex]
+		r.persist()
 		r.Unlock()
 		return
 	}
-	newLogs := append(r.logs[:req.PrevLogIndex+1], req.Entries...)
-	r.logs = newLogs
+	newLogs := append(r.Logs[:req.PrevLogIndex+1], req.Entries...)
+	r.Logs = newLogs
+	r.persist()
 	if req.LeaderCommit > r.commitIndex {
 		r.commitIndex = int(math.Min(float64(req.LeaderCommit), float64(r.getLastLog().Index)))
 		r.applyMsg()
@@ -137,8 +141,8 @@ func (r *Raft) applyMsg() {
 	for i := r.lastApplied + 1; i <= r.commitIndex; i++ {
 		r.applyCh <- ApplyMsg{
 			CommandValid: true,
-			Command:      r.logs[i].Commend,
-			CommandIndex: r.logs[i].Index,
+			Command:      r.Logs[i].Commend,
+			CommandIndex: r.Logs[i].Index,
 		}
 	}
 	r.lastApplied = r.commitIndex
@@ -147,6 +151,7 @@ func (r *Raft) applyMsg() {
 func (r *Raft) appendEntries() {
 	r.debug("[appendEntries] 开始进行日志同步检测")
 	replicateNum := 1
+	lastLog := r.getLastLog()
 	for peerIndex, _ := range r.peers {
 		if peerIndex == r.me {
 			continue
@@ -157,17 +162,16 @@ func (r *Raft) appendEntries() {
 				r.Unlock()
 				return
 			}
-			lastLog := r.getLastLog()
 			prevIndex, prevTerm := r.getPrevLogInfo(server)
 			req := &AppendEntriesArgs{
-				Term:         r.currentTerm,
+				Term:         r.CurrentTerm,
 				LeaderId:     r.me,
 				PrevLogIndex: prevIndex,
 				PrevLogTerm:  prevTerm,
 				LeaderCommit: r.commitIndex,
 			}
 			if lastLog.Index >= r.nextIndex[server] && r.nextIndex[server] >= 0 {
-				req.Entries = r.logs[r.nextIndex[server]:]
+				req.Entries = r.Logs[r.nextIndex[server] : lastLog.Index+1]
 			} else {
 				req.Entries = []Log{}
 			}
@@ -182,16 +186,16 @@ func (r *Raft) appendEntries() {
 				}
 				if resp.Success {
 					r.debug("[appendEntries] server-%d日志同步成功", server)
-					r.matchIndex[server] = r.getLastLog().Index
+					r.matchIndex[server] = lastLog.Index
 					r.nextIndex[server] = r.matchIndex[server] + 1
 					replicateNum += 1
 					if replicateNum >= int(math.Ceil(float64(len(r.peers))/2)) {
 						r.debug("[appendEntries] 超过半数server同步成功，开始更新commitIndex，lastApplied")
-						r.commitIndex = r.getLastLog().Index
+						r.commitIndex = lastLog.Index
 						r.applyMsg()
 						r.debug("[appendEntries] 超过半数server同步成功，更新commitIndex，lastApplied完成")
 					}
-				} else if resp.Term > r.currentTerm {
+				} else if resp.Term > r.CurrentTerm {
 					r.debug("[appendEntries] 检测到server-%d的任期大于当前任期，准备变为FLOWER", server)
 					r.changeState(FLOWER, false)
 					r.Unlock()

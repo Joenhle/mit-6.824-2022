@@ -18,6 +18,10 @@ package raft
 //
 
 import (
+	"bytes"
+	"log"
+	"mit6.824-lab/labgob"
+
 	//	"bytes"
 	"sync"
 	"sync/atomic"
@@ -48,10 +52,12 @@ type Raft struct {
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+	// persistent variables
+	CurrentTerm int
+	VotedFor    int
+	Logs        []Log
+
 	state             RaftState
-	currentTerm       int
-	votedFor          int
-	logs              []Log
 	commitIndex       int
 	lastApplied       int
 	nextIndex         []int
@@ -67,7 +73,7 @@ func (r *Raft) GetState() (int, bool) {
 	// Your code here (2A).
 	r.RLock()
 	defer r.RUnlock()
-	return r.currentTerm, r.state == LEADER
+	return r.CurrentTerm, r.state == LEADER
 }
 
 //
@@ -76,14 +82,13 @@ func (r *Raft) GetState() (int, bool) {
 // see paper's Figure 2 for a description of what should be persistent.
 //
 func (rf *Raft) persist() {
-	// Your code here (2C).
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.CurrentTerm)
+	e.Encode(rf.VotedFor)
+	e.Encode(rf.Logs)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 //
@@ -93,19 +98,21 @@ func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
-	// Your code here (2C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var (
+		currentTerm int
+		votedFor    int
+		logs        = make([]Log, 0)
+	)
+	if d.Decode(&currentTerm) != nil || d.Decode(&votedFor) != nil || d.Decode(&logs) != nil {
+		log.Fatalf("raft读取持久化数据失败")
+	} else {
+		rf.CurrentTerm = currentTerm
+		rf.VotedFor = votedFor
+		rf.Logs = logs
+		rf.debug("读取持久化数据 currentTerm:%v, votedFor:%v, logs:%v", currentTerm, votedFor, logs)
+	}
 }
 
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
@@ -129,20 +136,23 @@ func (rf *Raft) killed() bool {
 
 func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan ApplyMsg) *Raft {
 	r := &Raft{
+		state:               FLOWER,
+		VotedFor:            -1,
 		commitIndex:         0,
 		lastApplied:         0,
 		electionChannel:     make(chan struct{}, 10),
 		logReplicateChannel: make(chan struct{}, 10),
 		applyCh:             applyCh,
-		logs:                []Log{{Index: 0, Term: 0}},
+		Logs:                []Log{{Index: 0, Term: 0}},
+		peers:               peers,
+		nextIndex:           make([]int, len(peers)),
+		matchIndex:          make([]int, len(peers)),
+		persister:           persister,
+		me:                  me,
 	}
-	r.peers = peers
-	r.persister = persister
-	r.me = me
-	r.changeState(FLOWER, true)
-
+	r.readPersist(persister.ReadRaftState())
+	r.debug("raft initial over")
 	go r.watchElectionTimeout()
 	go r.healthyCheck()
-	//r.readPersist(persister.ReadRaftState())
 	return r
 }
